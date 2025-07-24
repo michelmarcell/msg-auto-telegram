@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: techsolution  # ⚠️ Cambia esto!
+    plan: free
+    runtime: python
+    buildCommand: pip install -r requirements.txt  # Instala dependencias
+    startCommand: python main.py  # Comando de inicio
+    envVars:
+      - key: TELEGRAM_TOKEN
+        value: "8111684515:AAGAb9QiR7Uuf9nmNdb4kVXN_-uvUND5xv0"  # ⚠️ Usa TU token real
+      - key: PYTHON_VERSION
+        value: "3.9"  # Versión compatible con tu código

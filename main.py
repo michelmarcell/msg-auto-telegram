@@ -1,0 +1,103 @@
+import os
+import logging
+from telegram import Bot
+from telegram.ext import Application, CommandHandler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+
+# Configura logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+
+TOKEN = os.getenv('TELEGRAM_TOKEN')
+GRUPOS_PERMITIDOS = {}  # {chat_id: nombre}
+
+async def enviar_mensaje(context):
+    mensaje = """
+🌟 ¡Transformamos tus ideas en soluciones digitales! 🌟
+💻 *Soluciones Informáticas Integrales* 💻
+
+En *Tech Solutions* somos especialistas en:
+    
+🤖 *Desarrollo de Bots Personalizados*:
+   - Bots de atención al cliente 24/7
+   - Bots para automatizar ventas y reservas
+   - Bots educativos con contenido interactivo
+   - Bots para gestión de comunidades y grupos
+   - Bots de notificaciones y alertas
+
+🌐 *Desarrollo Web Corporativo*:
+   - Páginas web profesionales
+   - Tiendas online completas
+   - Portafolios digitales
+   - Sistemas de gestión interna
+
+🔄 *Beneficios para tu negocio*:
+   - Ahorro de hasta 70% en costos operativos
+   - Atención a clientes sin límites de horario
+   - Procesos automatizados sin errores humanos
+   - Soluciones a medida de tus necesidades
+
+💡 *¡Este mensaje fue generado automáticamente por nuestro bot!* 
+   ¿Quieres uno similar para tu empresa?
+
+📲 *Contáctanos ahora*:
+📞 Llamadas: +53 58784497
+📱 WhatsApp: https://wa.me/5358784497
+    """
+    for chat_id in GRUPOS_PERMITIDOS:
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=mensaje,
+                parse_mode="Markdown"
+            )
+            logging.info(f"Mensaje enviado a {GRUPOS_PERMITIDOS[chat_id]}")
+        except Exception as e:
+            logging.error(f"Error en {chat_id}: {e}")
+
+async def suscribir(update, context):
+    chat = update.effective_chat
+    if chat.type not in ["group", "supergroup"]:
+        await update.message.reply_text("❌ Solo funciona en grupos")
+        return
+        
+    GRUPOS_PERMITIDOS[chat.id] = chat.title
+    await update.message.reply_text(f"✅ {chat.title} suscrito!")
+
+def load_groups():
+    try:
+        with open('grupos.txt') as f:
+            for line in f:
+                chat_id, name = line.strip().split(',')
+                GRUPOS_PERMITIDOS[int(chat_id)] = name
+    except FileNotFoundError:
+        pass
+
+def save_groups():
+    with open('grupos.txt', 'w') as f:
+        for chat_id, name in GRUPOS_PERMITIDOS.items():
+            f.write(f"{chat_id},{name}\n")
+
+async def main():
+    load_groups()
+    
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler("suscribir", suscribir))
+    
+    # Configura el scheduler
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        enviar_mensaje,
+        trigger=IntervalTrigger(hours=1),
+        args=[application]
+    )
+    scheduler.start()
+    
+    await application.run_polling()
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
