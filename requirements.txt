@@ -3,4 +3,4 @@ apscheduler==3.10.0
 python-dotenv==1.0.0
 fastapi==0.95.2
 uvicorn==0.22.0
-aiohttp==3.8.4  # Versión conocida por funcionar en Render
+aiohttp==3.8.1  # Versión conocida por funcionar con Python 3.9
