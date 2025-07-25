@@ -1,185 +1,218 @@
 import os
 import logging
 import asyncio
-import aiohttp
 from configparser import ConfigParser
 from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
-    ContextTypes,
-    filters
+    ContextTypes
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI
 import uvicorn
 from threading import Thread
+import requests
+from datetime import datetime
 
-# Configuración inicial
+# Configuración de logging mejorada
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('bot.log'),
+        logging.FileHandler('bot_activity.log'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-# Cargar configuración
-config = ConfigParser()
-config.read('config.ini')
+# Carga de configuración segura
+def load_config():
+    config = ConfigParser()
+    config.read('config.ini')
+    
+    return {
+        'TOKEN': config.get('Telegram', 'TOKEN', fallback=os.getenv('TELEGRAM_TOKEN')),
+        'ADMIN_ID': config.getint('Telegram', 'ADMIN_ID', fallback=os.getenv('ADMIN_ID', 0)),
+        'APP_URL': config.get('Telegram', 'APP_URL', fallback=os.getenv('APP_URL')),
+        'ALLOWED_GROUPS': {
+            int(id_.strip()): "" for id_ in 
+            config.get('Grupos', 'Permitidos', fallback="").split(',') 
+            if id_.strip()
+        }
+    }
 
-TOKEN = config.get('Telegram', 'TOKEN', fallback=os.getenv('TELEGRAM_TOKEN'))
-ADMIN_ID = config.getint('Telegram', 'ADMIN_ID', fallback=os.getenv('ADMIN_ID'))
-APP_URL = config.get('Telegram', 'APP_URL', fallback=os.getenv('APP_URL'))
+config = load_config()
 
-if not TOKEN:
-    raise ValueError("No se configuró el token de Telegram")
+if not config['TOKEN']:
+    raise ValueError("Token de Telegram no configurado")
 
-# Grupos permitidos (cargar desde configuración)
-GRUPOS_PERMITIDOS = {
-    int(id_.strip()): "" for id_ in 
-    config.get('Grupos', 'Permitidos', fallback="").split(',') 
-    if id_.strip()
-}
+# Mensaje mejorado con gestión de errores
+def get_message():
+    return """
+🌟 *Oferta Especial* 🌟
+¡Desarrollamos soluciones a tu medida!
 
-# Mensaje predefinido (puedes moverlo a un archivo aparte)
-MENSAJE_PREDEFINIDO = """
-🌟 ¡Transformamos tus ideas en soluciones digitales! 🌟
-💻 *Soluciones Informáticas Integrales* 💻
+💻 *Servicios*:
+- Bots personalizados
+- Páginas web
+- Aplicaciones móviles
 
-... (tu mensaje completo aquí) ...
-"""
+📅 *Promoción válida hasta*: {date}
+📞 Contacto: +123456789
 
-async def verificar_acceso(update: Update) -> bool:
-    """Verifica si el usuario tiene acceso a comandos administrativos"""
+*Este mensaje fue enviado automáticamente*
+""".format(date=datetime.now().strftime("%d/%m/%Y"))
+
+# Sistema de keep-alive mejorado (sin aiohttp)
+def keep_alive():
+    try:
+        if config['APP_URL']:
+            response = requests.get(f"{config['APP_URL']}/ping", timeout=10)
+            logger.info(f"Keep-alive status: {response.status_code}")
+    except Exception as e:
+        logger.error(f"Keep-alive error: {str(e)}")
+    finally:
+        # Programa el próximo keep-alive
+        Thread(target=lambda: (
+            asyncio.sleep(600),  # 10 minutos
+            keep_alive()
+        )).start()
+
+# Gestión de grupos con persistencia
+def save_groups():
+    try:
+        with open('allowed_groups.txt', 'w') as f:
+            for chat_id, title in config['ALLOWED_GROUPS'].items():
+                f.write(f"{chat_id},{title}\n")
+    except Exception as e:
+        logger.error(f"Error saving groups: {e}")
+
+def load_groups():
+    try:
+        with open('allowed_groups.txt') as f:
+            for line in f:
+                chat_id, title = line.strip().split(',', 1)
+                config['ALLOWED_GROUPS'][int(chat_id)] = title
+    except FileNotFoundError:
+        logger.info("No groups file found, starting fresh")
+    except Exception as e:
+        logger.error(f"Error loading groups: {e}")
+
+# Handlers de comandos mejorados
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja el comando /start"""
     user = update.effective_user
-    chat = update.effective_chat
+    logger.info(f"Start command from {user.id}")
     
-    # Verificar administrador global
-    if user.id == ADMIN_ID:
-        return True
-    
-    # Verificar grupo permitido y administrador
-    if chat.id in GRUPOS_PERMITIDOS:
-        try:
-            member = await chat.get_member(user.id)
-            return member.status in ['creator', 'administrator']
-        except Exception as e:
-            logger.error(f"Error verificando miembro: {e}")
-    
-    return False
+    await update.message.reply_text(
+        "🤖 *Bot de Mensajes Automáticos*\n\n"
+        "Comandos disponibles:\n"
+        "/suscribir - Suscribe este grupo\n"
+        "/info - Muestra información del bot\n\n"
+        "ℹ️ Solo administradores pueden usar comandos",
+        parse_mode="Markdown"
+    )
 
-async def keep_alive():
-    """Mantiene activo el servicio en Render"""
-    if not APP_URL:
+async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja el comando /suscribir"""
+    chat = update.effective_chat
+    user = update.effective_user
+    
+    if chat.type not in ["group", "supergroup"]:
+        await update.message.reply_text("❌ Este comando solo funciona en grupos")
         return
         
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{APP_URL}/ping") as resp:
-                logger.info(f"Keep-alive: {resp.status}")
+        member = await chat.get_member(user.id)
+        if member.status not in ['creator', 'administrator']:
+            await update.message.reply_text("❌ Solo administradores pueden suscribir grupos")
+            return
     except Exception as e:
-        logger.error(f"Error en keep-alive: {e}")
+        logger.error(f"Error checking admin status: {e}")
+        await update.message.reply_text("⚠️ Error verificando permisos")
+        return
 
-async def enviar_mensaje(context: ContextTypes.DEFAULT_TYPE):
-    """Envía el mensaje a los grupos permitidos"""
-    for chat_id in GRUPOS_PERMITIDOS:
+    config['ALLOWED_GROUPS'][chat.id] = chat.title
+    save_groups()
+    
+    await update.message.reply_text(
+        f"✅ *{chat.title} suscrito correctamente!*\n\n"
+        f"Ahora recibirán mensajes automáticos cada hora.",
+        parse_mode="Markdown"
+    )
+    logger.info(f"New group subscribed: {chat.id} - {chat.title}")
+
+async def send_scheduled_message(context: ContextTypes.DEFAULT_TYPE):
+    """Envía mensajes programados"""
+    logger.info("Starting scheduled message send")
+    
+    for chat_id, title in config['ALLOWED_GROUPS'].items():
         try:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=MENSAJE_PREDEFINIDO,
+                text=get_message(),
                 parse_mode="Markdown"
             )
-            logger.info(f"Mensaje enviado a {chat_id}")
+            logger.info(f"Message sent to {title} ({chat_id})")
         except Exception as e:
-            logger.error(f"Error enviando a {chat_id}: {e}")
+            logger.error(f"Error sending to {chat_id}: {e}")
+            # Opcional: remover grupos inactivos
+            # del config['ALLOWED_GROUPS'][chat_id]
 
-async def suscribir(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja el comando /suscribir"""
-    if not await verificar_acceso(update):
-        await update.message.reply_text("❌ Acceso denegado")
-        return
-        
-    chat = update.effective_chat
-    if chat.type not in ["group", "supergroup"]:
-        await update.message.reply_text("❌ Solo funciona en grupos")
-        return
-        
-    GRUPOS_PERMITIDOS[chat.id] = chat.title
-    await update.message.reply_text(f"✅ {chat.title} suscrito!")
-    logger.info(f"Nuevo grupo suscrito: {chat.id} - {chat.title}")
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja el comando /start"""
-    await update.message.reply_text(
-        "🤖 Bot de mensajes automáticos\n\n"
-        "Comandos disponibles:\n"
-        "/suscribir - Suscribe este grupo (solo admins)\n"
-        "/info - Muestra información del bot"
-    )
-
-async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja el comando /info"""
-    if not await verificar_acceso(update):
-        return
-        
-    await update.message.reply_text(
-        f"🔒 Bot protegido\n\n"
-        f"📊 Grupos suscritos: {len(GRUPOS_PERMITIDOS)}\n"
-        f"🔄 Próximo mensaje automático: cada 1 hora\n"
-        f"🛡️ Admin: {ADMIN_ID}"
-    )
-
-def iniciar_servidor_web():
-    """Inicia un servidor FastAPI para health checks"""
+# Servidor web para health checks
+def run_web_server():
     app = FastAPI()
     
     @app.get("/")
-    async def root():
-        return {"status": "ok", "bot": "active"}
+    async def health_check():
+        return {
+            "status": "running",
+            "bot": "active",
+            "groups": len(config['ALLOWED_GROUPS'])
+        }
     
     @app.get("/ping")
     async def ping():
-        return {"response": "pong"}
+        return {"response": "pong", "timestamp": datetime.now().isoformat()}
     
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 async def main():
-    """Función principal"""
+    """Punto de entrada principal"""
+    # Cargar grupos permitidos
+    load_groups()
+    
     # Iniciar servidor web en segundo plano
-    Thread(target=iniciar_servidor_web, daemon=True).start()
+    Thread(target=run_web_server, daemon=True).start()
     
-    # Configurar el bot
-    application = Application.builder().token(TOKEN).build()
+    # Iniciar sistema keep-alive
+    keep_alive()
     
-    # Manejadores de comandos
+    # Configurar aplicación de Telegram
+    application = Application.builder().token(config['TOKEN']).build()
+    
+    # Registrar handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("suscribir", suscribir))
-    application.add_handler(CommandHandler("info", info))
+    application.add_handler(CommandHandler("suscribir", subscribe))
     
-    # Programar tareas automáticas
+    # Configurar scheduler
     scheduler = AsyncIOScheduler()
-    
-    # Mensaje automático cada hora
     scheduler.add_job(
-        enviar_mensaje,
+        send_scheduled_message,
         trigger=IntervalTrigger(hours=1),
         args=[application]
     )
-    
-    # Keep-alive cada 10 minutos
-    scheduler.add_job(
-        keep_alive,
-        trigger=IntervalTrigger(minutes=10)
-    )
-    
     scheduler.start()
     
     # Iniciar el bot
     await application.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot detenido manualmente")
+    except Exception as e:
+        logger.critical(f"Error fatal: {e}")
