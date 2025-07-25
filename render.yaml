@@ -1,16 +1,15 @@
 services:
-  - type: worker  # Cambiado de 'web' a 'worker' para evitar búsqueda de puertos
-    name: techsolution-bot
+  - type: web
+    name: techsolution
     plan: free
     runtime: python
-    pythonVersion: "3.9"
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      pip install -r requirements.txt
     startCommand: python main.py
     envVars:
       - key: TELEGRAM_TOKEN
-        value: "8111684515:AAGAb9QiR7Uuf9nmNdb4kVXN_-uvUND5xv0"
-    # Configuraciones para optimizar el free tier:
-    autoStart: true
-    autoDeploy: true
-    healthCheckPath: /health  # Ruta ficticia para evitar warnings
-    healthCheckTimeout: 120s
+        value: ${TELEGRAM_TOKEN}
+      - key: PYTHON_VERSION
+        value: "3.9"
+      - key: APP_URL
+        value: ${APP_URL}
